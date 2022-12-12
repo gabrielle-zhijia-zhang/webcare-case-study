@@ -1,0 +1,256 @@
+---
+title: "Webcare Mini Case"
+author: "Gabrielle Zhang"
+date: '2022-11-28'
+output: html_document
+---
+
+```{r}
+hotel= read.csv("/Users/gabriellezhang/Documents/IMC/463 Machine Learning/webcare case/webcare.csv", header = T)
+```
+
+```{r, eval=FALSE}
+library(dplyr)
+library(car)
+library(corrplot)
+library(FactoMineR)
+library(factoextra)
+library(glmnet)
+```
+
+
+
+### Correlation Matrix and PCA for the 5 Sig Variables
+
+
+```{r}
+matrix1 <- cor(hotel[,21:25])
+round(matrix1, 2)
+plot(hotel[,21:25])
+```
+```{r, eval=FALSE}
+factor <- FactoMineR:::PCA(hotel[,21:25], scale.unit = TRUE, ncp = 3, graph = TRUE)
+eig.val <- factoextra:::get_eigenvalue(factor)
+eig.val 
+factoextra:::fviz_eig(factor)
+```
+
+We are going to use 3 principle components - sigmanager & signame, sigdepart & sigstaff, sighotel
+
+Combine sigmanger with signame, and sigdepart with sigstaff
+
+```{r}
+hotel$sigdepart_staf = (hotel$sigdepart+hotel$sigstaff)/2
+hotel$signame_manag = (hotel$signame+hotel$sigmanager)/2
+```
+
+
+### Set Training and Test Sets for Regression Models
+
+```{r}
+set.seed(12345)
+train = runif(nrow(hotel))<.5
+dim(hotel)
+table(train) 
+```
+```{r}
+hotel$ota=NULL
+hotel$X=NULL  
+```
+
+### Full Model
+
+```{r, eval=FALSE}
+fit0 = glm(nextbook~logbook + time + respond + as.factor(hotel_id)
+           +tailor + invitecont + explain + personalize + nonverbal 
+           + apology + compensate + chanchange + info
+           + defensive + gratitude + sigdepart + sigstaff+ signame +sigmanager
+           + sighotel, hotel, family=poisson)
+plot(fit0, which=1, pch=16, cex=.8)
+yhat = predict(fit0, hotel[!train,])
+mean((hotel$nextbook[!train] - yhat)^2)    
+summary(fit0)
+car:::vif(fit0)
+round(coef(fit0),3)
+```
+
+Full Model
+
+MSE: 21446.3
+AIC: 16580
+
+
+### Full Model with Combined Sig Variables
+```{r, eval=FALSE}
+fit = glm(nextbook ~ logbook + time + respond +defensive
+          +invitecont + explain+ nonverbal + apology + compensate 
+          + chanchange + info + defensive + gratitude + sigmanager 
+          + sigdepart_staf + sighotel, hotel, family = poisson, subset=train)
+plot(fit, which=1, pch=16, cex=.8)
+yhat = predict(fit, hotel[!train,])
+mean((hotel$nextbook[!train] - yhat)^2)     
+summary(fit) 
+car:::vif(fit)
+round(coef(fit),3)
+```
+
+Full Model with Combined Variables
+
+MSE: 21444.35
+AIC: 8395.6
+
+
+### Stepwise Regression
+```{r, eval=FALSE}
+fit2 = step(fit)
+yhat = predict(fit2, hotel[!train,])
+mean((hotel$nextbook[!train] - yhat)^2)
+summary(fit2) 
+round(coef(fit2),3)
+```
+
+Stepwise Regression Model
+
+MSE: 21444.47
+
+AIC 8389.71
+
+Model: 
+
+nextbook ~ logbook + explain + nonverbal + compensate + chanchange + info + gratitude + sigmanager + sigdepart_staf + sighotel
+
+
+### Ridge Regression
+```{r, eval=FALSE}
+x = model.matrix(nextbook ~ logbook + time + respond +defensive
+                  +invitecont + explain+ nonverbal + apology + compensate 
+                  + chanchange + info + defensive + gratitude + sigmanager 
+                  + sigdepart_staf + sighotel, hotel)
+fit.ridge = glmnet(x[train,], hotel$nextbook[train], alpha=0) 
+plot(fit.ridge, xvar="lambda")
+fit.cv = cv.glmnet(x[train,], hotel$nextbook[train], alpha=0) 
+fit.cv$lambda.min        
+abline(v=log(fit.cv$lambda.min), col=2)
+plot(fit.cv)          
+yhat = predict(fit.ridge, s=fit.cv$lambda.min, newx=x[!train,]) 
+mean((hotel$nextbook[!train] - yhat)^2)   
+
+x_original <- data.matrix(x[, 2:16])
+y_original <- hotel[,"nextbook"]
+original_ridge <- glmnet(x_original, y_original, alpha = 0, lambda = 8.8966)
+round(coef(original_ridge),3)
+```
+
+Ridge Regression Model
+
+MSE: 3256.615
+
+### Lasso Regression
+```{r, eval=FALSE}
+fit.lasso = glmnet(x[train,], hotel$nextbook[train], alpha=1) 
+plot(fit.lasso, xvar="lambda")
+fit.cv = cv.glmnet(x[train,], hotel$nextbook[train], alpha=1)
+plot(fit.cv)
+fit.cv$lambda.min #lambda = 1.022897
+abline(v=log(fit.cv$lambda.min), col=2)
+abline(v=log(fit.cv$lambda.1se), col=3)
+yhat = predict(fit.lasso, s=fit.cv$lambda.min, newx=x[!train,])
+mean((hotel$nextbook[!train] - yhat)^2)   
+
+original_lasso <- glmnet(x_original, y_original, alpha = 1, lambda = 1.0229)
+round(coef(original_lasso),3)
+```
+
+Lasso Regression Model 
+
+MSE: 3226.776
+
+
+### Plot Nextbook Against Logbook, Bookings, and Volume
+
+```{r, eval=FALSE}
+for(i in 2:5){
+  plot(hotel[,i], hotel$nextbook, pch=16, cex=.5, main=names(hotel)[i])
+  lines(smooth.spline(hotel[,i], hotel$nextbook, df=5), col=2, lwd=2)
+}
+```
+
+### Forward Stepwise Regression with Transformed Model
+
+```{r, eval=FALSE}
+hotel$nextbook_sqrt = sqrt(hotel$nextbook)
+fit3= lm(nextbook_sqrt ~ 1, hotel, subset=train)
+fit4 = step(fit3, scope = ~ logbook+I(logbook^2)+defensive
+            +invitecont + explain +time + respond + nonverbal 
+            + apology + compensate + chanchange + info + defensive 
+            + gratitude + sigmanager + sigdepart_staf + sighotel)
+```
+
+
+
+```{r, eval=FALSE}
+plot(fit4, which=1, pch=16, cex=.8)
+yhat = predict(fit4, hotel[!train,])
+mean((hotel$nextbook_sqrt[!train] - yhat)^2)       
+summary(fit4) 
+```
+
+
+Stepwise: 
+
+MSE: 2.867
+
+nextbook_sqrt ~ I(logbook^2) + logbook + sighotel + chanchange + nonverbal
+
+
+
+### Ridge Regrssion with Transformed Model
+```{r, eval=FALSE}
+x = model.matrix(nextbook_sqrt ~ logbook+I(logbook^2)+defensive
+                 +invitecont + explain +time + respond + nonverbal 
+                 + apology + compensate + chanchange + info + defensive 
+                 + gratitude + sigmanager + sigdepart_staf + sighotel, hotel)
+fit.ridge = glmnet(x[train,], hotel$nextbook_sqrt[train], alpha=0) 
+plot(fit.ridge, xvar="lambda")
+fit.cv = cv.glmnet(x[train,], hotel$nextbook_sqrt[train], alpha=0) 
+
+fit.cv$lambda.min       
+abline(v=log(fit.cv$lambda.min), col=2)
+plot(fit.cv)        
+yhat = predict(fit.ridge, s=fit.cv$lambda.min, newx=x[!train,]) 
+mean((hotel$nextbook_sqrt[!train] - yhat)^2)      
+
+x_var <- data.matrix(x[, 2:17])
+y_var <- hotel[, "nextbook_sqrt"]
+best_ridge <- glmnet(x_var, y_var, alpha = 0, lambda = 0.50027)
+round(coef(best_ridge),3)
+```
+
+Ridge Regrssion with Transformed Model
+
+MSE 3.128
+
+### Lasso Regression with the Transformed Model
+
+```{r, eval=FALSE}
+fit.lasso = glmnet(x[train,], hotel$nextbook_sqrt[train], alpha=1) 
+plot(fit.lasso, xvar="lambda")
+fit.cv = cv.glmnet(x[train,], hotel$nextbook_sqrt[train], alpha=1)
+fit.cv$lambda.min  #lamda = 0.00895
+plot(fit.cv)
+abline(v=log(fit.cv$lambda.min), col=2)
+abline(v=log(fit.cv$lambda.1se), col=3)
+yhat = predict(fit.lasso, s=fit.cv$lambda.min, newx=x[!train,])
+mean((hotel$nextbook_sqrt[!train] - yhat)^2)      
+best_lasso <- glmnet:::glmnet(x_var, y_var, alpha = 1, lambda = 0.00895)
+round(coef(best_lasso),3)
+```
+
+Lasso Regression with the Transformed Model
+
+MSE: 2.779
+
+
+
+
+
